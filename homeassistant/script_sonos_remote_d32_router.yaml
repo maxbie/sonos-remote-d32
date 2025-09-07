@@ -1,0 +1,159 @@
+alias: Sonos Remote D32 Router
+mode: parallel
+fields:
+  action:
+    description: vol_delta | preset | toggle_playback | deep_sleep
+  player_target:
+    description: 1 oder 2 (vom ESP-Schalter)
+  preset:
+    description: Taste 1..6
+  delta:
+    description: Lautstärke-Differenz (int)
+sequence:
+  - data:
+      level: warning
+      message: >
+        player_target={{ player_target }} | preset={{ preset }} | delta={{ delta
+        }} | action={{ action }}
+    action: system_log.write
+  - variables:
+      mp: |-
+        {% if player_target | int == 2 %}
+          media_player.sonos_2
+        {% else %}
+          media_player.sonos_1
+        {% endif %}
+      spotify_playlist_uri: spotify:playlist:5KQhNCnQYq4tkNnPYkfKyW
+      preset_key: "{{ (preset|int) | string }}"
+      state_str: "{{ states(mp) }}"
+      is_playing: "{{ state_str == 'playing' }}"
+      app_name: "{{ (state_attr(mp, 'app_name') or '') | lower }}"
+      content_id: "{{ (state_attr(mp, 'media_content_id') or '') | string }}"
+      media_dur: "{{ state_attr(mp, 'media_duration') | default(0) }}"
+      is_tracklike: "{{ media_dur | int(0) > 0 }}"
+      is_spotify: "{{ 'spotify' in app_name or content_id.startswith('spotify:') }}"
+      is_radio: |-
+        {{
+          content_id.startswith('media-source://radio_browser')
+          or content_id.startswith('x-rincon-mp3radio://')
+          or content_id.startswith('http')
+          or content_id.startswith('aac://')
+          or app_name in ['tunein','sonos radio','radio','radio.net']
+        }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'vol_delta' }}"
+        sequence:
+          - variables:
+              step: 0.03
+              cur: "{{ state_attr(mp, 'volume_level')|float(0) }}"
+              new: "{{ [[cur + (delta|int)*step, 1.0] | min, 0.0] | max }}"
+          - target:
+              entity_id: "{{ mp }}"
+            data:
+              volume_level: "{{ new }}"
+            action: media_player.volume_set
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'toggle_playback' }}"
+        sequence:
+          - target:
+              entity_id: "{{ mp }}"
+            action: media_player.media_play_pause
+            data: {}
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'preset' and preset|int == 1 }}"
+        sequence:
+          - target:
+              entity_id: "{{ mp }}"
+            data:
+              media_content_id: >-
+                media-source://radio_browser/962af9b5-0601-11e8-ae97-52543be04c81
+              media_content_type: audio/mpeg
+              enqueue: replace
+            action: media_player.play_media
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'preset' and preset|int == 2 }}"
+        sequence:
+          - target:
+              entity_id: "{{ mp }}"
+            data:
+              media_content_id: >-
+                x-rincon-mp3radio://jazzblackmusic.ice.infomaniak.ch/jazzblackmusic-high.aac
+              media_content_type: music
+              enqueue: replace
+            action: media_player.play_media
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'preset' and preset|int == 3 }}"
+        sequence:
+          - target:
+              entity_id: "{{ mp }}"
+            data:
+              media_content_id: x-rincon-mp3radio://strm112.1.fm/back280s_mobile_mp3
+              media_content_type: music
+              enqueue: replace
+            action: media_player.play_media
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'preset' and preset|int == 4 }}"
+        sequence:
+          - target:
+              entity_id: "{{ mp }}"
+            data:
+              media_content_id: >-
+                x-rincon-mp3radio://n0d.radiojar.com/6cbvkaa1mrruv?1643199882=&rj-ttl=5&rj-tok=AAABmR7fU70Ajubgt2k1GKuffQ
+              media_content_type: music
+              enqueue: replace
+            action: media_player.play_media
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'preset' and preset|int == 5 }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{ is_playing and (is_spotify or is_tracklike) and not
+                      is_radio }}
+                sequence:
+                  - target:
+                      entity_id: "{{ mp }}"
+                    action: media_player.media_next_track
+                    data: {}
+            default:
+              - target:
+                  entity_id: "{{ mp }}"
+                action: media_player.media_stop
+                data: {}
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'preset' and preset|int == 6 }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ is_playing and is_spotify }}"
+                sequence:
+                  - target:
+                      entity_id: "{{ mp }}"
+                    action: media_player.media_stop
+                    data: {}
+            default:
+              - target:
+                  entity_id: "{{ mp }}"
+                data:
+                  media_content_id: "{{ spotify_playlist_uri }}"
+                  media_content_type: music
+                action: media_player.play_media
+      - conditions:
+          - condition: template
+            value_template: "{{ action == 'deep_sleep' }}"
+        sequence:
+          - service: system_log.write
+            data:
+              level: warning
+              message: "Sonos Remote D32 geht jetzt in Deep Sleep"
