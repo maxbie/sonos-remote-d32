@@ -11,10 +11,17 @@ Includes OLED display, rotary encoder, LED feedback, deep sleep mode – and eve
 - Deep Sleep mode with Home Assistant status
 - Built-in Pong game (long-press knob to toggle)
 
-## Structure
-- `esphome/sonos-remote-d32-flat.yaml` → full ESPHome configuration
-- `homeassistant/automation_sonos_remote.yaml` → HA automation (event router)
-- `homeassistant/script_sonos_remote_d32_router.yaml` → HA script (logic router)
+## Screenshots
+
+| Spotify | Radio 1 | Game Over |
+|---------|---------|-----------|
+| ![](docs/sonos_remote_spotify.jpg) | ![](docs/sonos_remote_radio1.jpg) | ![](docs/sonos_remote_gameover.jpg) |
+
+## Configuration
+
+- [ESPHome config](esphome/sonos-remote-d32-flat.yaml)  
+- [Home Assistant automation](homeassistant/automation_sonos_remote.yaml)  
+- [Home Assistant router script](homeassistant/script_sonos_remote_d32_router.yaml)  
 
 ## Installation
 ### ESPHome
