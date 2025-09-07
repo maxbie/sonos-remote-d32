@@ -1,0 +1,17 @@
+alias: ESPHome Sonos Remote D32 → Router
+triggers:
+  - event_type: esphome.sonos_remote
+    trigger: event
+actions:
+  - variables:
+      action: "{{ trigger.event.data.action | default('') }}"
+      preset: "{{ (trigger.event.data.preset | default(0)) | int }}"
+      delta: "{{ (trigger.event.data.delta | default(0)) | int }}"
+      player_target: "{{ (trigger.event.data.target | default(1)) | int }}"
+  - data:
+      action: "{{ action }}"
+      player_target: "{{ player_target }}"
+      preset: "{{ preset }}"
+      delta: "{{ delta }}"
+    action: script.sonos_remote_d32_router
+mode: parallel
