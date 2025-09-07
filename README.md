@@ -13,9 +13,9 @@ Includes OLED display, rotary encoder, LED feedback, deep sleep mode – and eve
 
 ## Screenshots
 
-| Spotify | Radio 1 | Game Over |
+| Game Over | Radio 1 | Spotify |
 |---------|---------|-----------|
-| ![](docs/sonos_remote_spotify.jpg) | ![](docs/sonos_remote_radio1.jpg) | ![](docs/sonos_remote_gameover.jpg) |
+| ![](docs/sonos_remote_gameover.jpg) | ![](docs/sonos_remote_radio1.jpg) | ![](docs/sonos_remote_spotify.jpg) |
 
 ## Configuration
 
