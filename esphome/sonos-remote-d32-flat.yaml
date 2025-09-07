@@ -1,0 +1,1069 @@
+esphome:
+  name: "sonos-remote-d32-flat"
+  friendly_name: Sonos Remote – D32 – flat
+  project:
+    name: improvedlaziness.sonos_box_remote
+    version: "1.1"
+  on_boot:
+    priority: 600
+    then:
+      # Deep-Sleep-Indikator: beim Aufwachen auf OFF setzen
+      - binary_sensor.template.publish:
+          id: deep_sleep_active
+          state: OFF
+
+      - wait_until:
+          condition:
+            lambda: 'return id(sonos_switch).has_state();'
+          timeout: 2s
+      - script.execute: show_sonos_text
+
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+    advanced:
+      ignore_efuse_custom_mac: false
+  variant: ESP32
+  cpu_frequency: 160MHz
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.1.129
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+  fast_connect: true
+  power_save_mode: HIGH
+  output_power: 10dB
+  reboot_timeout: 0s
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+    on_begin:
+      - deep_sleep.prevent: deep_sleep_control
+    on_end:
+      - deep_sleep.allow: deep_sleep_control
+    on_error:
+      - deep_sleep.allow: deep_sleep_control
+
+
+logger:
+  level: INFO
+
+# ---------- Deep Sleep ----------
+deep_sleep:
+  id: deep_sleep_control
+  wakeup_pin:
+    number: GPIO14
+    inverted: true        # weckt bei LOW (Knopfdruck)
+    mode:
+      input: true
+      pullup: true        # interner Pull-Up auch im Sleep aktiv
+    allow_other_uses: true
+  wakeup_pin_mode: KEEP_AWAKE  # nicht einschlafen, solange Taste gehalten
+
+
+
+# ---------- Globals ----------
+globals:
+  - id: led_color_mode
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: gaming_mode
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: last_input_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: press_start_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: longpress_triggered
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  - id: last_display_text
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+
+  # Deep Sleep Timeout (20 seconds)
+  - id: deep_sleep_timeout_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '20000'
+
+  # Game State
+  - id: playing
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: game_over
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: paused
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: score
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: game_over_ms
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: countdown_until_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: game_over_blinked
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Paddle & Ball
+  - id: paddle_x
+    type: float
+    restore_value: no
+    initial_value: '64.0'
+  - id: enc_px_per_step
+    type: float
+    restore_value: no
+    initial_value: '18.0'
+  - id: ball_x
+    type: float
+    restore_value: no
+    initial_value: '64.0'
+  - id: ball_y
+    type: float
+    restore_value: no
+    initial_value: '20.0'
+  - id: ball_vx
+    type: float
+    restore_value: no
+    initial_value: '50.0'
+  - id: ball_vy
+    type: float
+    restore_value: no
+    initial_value: '50.0'
+
+  # Viewport
+  - id: vis_left
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: vis_right
+    type: int
+    restore_value: no
+    initial_value: '12'
+  - id: vis_top
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: vis_bottom
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Display-Sleep/Wake
+  - id: display_is_on
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: display_sleep_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '5000'
+
+  # Volume-Bundle
+  - id: pending_vol_delta
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: vol_flush_due_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  # Toast
+  - id: toast_reset_due_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: toast_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Battery throttle
+  - id: battery_next_update_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+i2c:
+  sda: 21
+  scl: 22
+  scan: true
+  id: bus_a
+  frequency: 400kHz
+
+# ---------- Display ----------
+display:
+  - platform: ssd1306_i2c
+    id: oled_display
+    model: "SH1106 128x64"
+    address: 0x3C
+    update_interval: never
+    contrast: 50%
+    lambda: |-
+      const int W  = it.get_width();
+      const int H  = it.get_height();
+      const int X0 = id(vis_left);
+      const int Y0 = id(vis_top);
+      const int X1 = W - id(vis_right);
+      const int Y1 = H - id(vis_bottom);
+      const int VW = (X1 > X0) ? (X1 - X0) : 0;
+      const int VH = (Y1 > Y0) ? (Y1 - Y0) : 0;
+
+      it.fill(Color::BLACK);
+
+      if (!id(gaming_mode)) {
+        it.printf(X0, Y0, id(oled_font), TextAlign::TOP_LEFT, "%s", id(display_text).state.c_str());
+        return;
+      }
+
+      const float Wv = float(VW);
+      const float Hv = float(VH);
+      if (Wv <= 0.0f || Hv <= 0.0f) return;
+
+      const float PADDLE_W = 24.0f;
+      const float PADDLE_H = 4.0f;
+      const float PADDLE_Y = Hv - 6.0f;
+      const float R        = 2.0f;
+
+      if (!id(playing) && id(countdown_until_ms) == 0 && !id(game_over)) {
+        it.printf(X0 + int(Wv/2), Y0 + int(Hv/2), id(oled_font), TextAlign::CENTER, "Pong");
+        return;
+      }
+
+      uint32_t now = millis();
+
+      // Countdown: nur zeichnen, Paddle beim Zeichnen clampen
+      if (id(countdown_until_ms) > now) {
+        float half = PADDLE_W * 0.5f;
+        float px = id(paddle_x);
+        if (px < half) px = half;
+        if (px > (Wv - half)) px = Wv - half;
+
+        it.filled_rectangle(int(X0 + px - half), int(Y0 + PADDLE_Y), int(PADDLE_W), int(PADDLE_H));
+        it.filled_rectangle(int(X0 + id(ball_x) - R), int(Y0 + id(ball_y) - R), int(R*2.0f), int(R*2.0f));
+
+        uint32_t rem = id(countdown_until_ms) - now;
+        int sec = (rem + 999) / 1000;
+        const char* txt = (sec == 3) ? "3..." : (sec == 2) ? "2..." : "1...";
+        it.printf(X0 + 2, Y0 + 2, id(oled_font), TextAlign::TOP_LEFT, "%s", txt);
+        return;
+      }
+
+      // Fallback direkt nach Countdown
+      if (!id(playing) && id(countdown_until_ms) != 0 && now >= id(countdown_until_ms) && !id(game_over)) {
+        it.printf(X0 + int(Wv/2), Y0 + int(Hv/2), id(oled_font), TextAlign::CENTER, "Pong");
+        return;
+      }
+
+      // Pause
+      if (id(paused) && id(playing)) {
+        float half = PADDLE_W * 0.5f;
+        float px = id(paddle_x);
+        if (px < half) px = half;
+        if (px > (Wv - half)) px = Wv - half;
+
+        it.filled_rectangle(int(X0 + px - half), int(Y0 + PADDLE_Y), int(PADDLE_W), int(PADDLE_H));
+        it.filled_rectangle(int(X0 + id(ball_x) - R), int(Y0 + id(ball_y) - R), int(R*2.0f), int(R*2.0f));
+        it.printf(X0 + int(Wv/2), Y0 + int(Hv/2) - 10, id(oled_font), TextAlign::CENTER, "PAUSE");
+        return;
+      }
+
+      // Spiel läuft ODER Game Over
+      if (id(playing) || id(game_over)) {
+        float half = PADDLE_W * 0.5f;
+        float px = id(paddle_x);
+        if (px < half) px = half;
+        if (px > (Wv - half)) px = Wv - half;
+
+        it.filled_rectangle(int(X0 + px - half), int(Y0 + PADDLE_Y), int(PADDLE_W), int(PADDLE_H));
+        it.filled_rectangle(int(X0 + id(ball_x) - R), int(Y0 + id(ball_y) - R), int(R*2.0f), int(R*2.0f));
+
+        if (id(playing)) {
+          it.printf(X0 + VW - 2, Y0 + 2, id(oled_font), TextAlign::TOP_RIGHT, "%d", id(score));
+        }
+
+        if (id(game_over)) {
+          it.printf(X0 + int(Wv/2), Y0 + int(Hv/2) - 12, id(oled_font), TextAlign::CENTER, "GAME OVER");
+          it.printf(X0 + int(Wv/2), Y0 + int(Hv/2) + 12, id(oled_font), TextAlign::CENTER, "SCORE %d", id(score));
+        }
+        return;
+      }
+
+font:
+  - file: "Pixolletta8px.ttf"
+    id: oled_font
+    size: 20
+    glyphs: " !\"%()+,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzäöüÄÖÜß"
+
+text_sensor:
+  - platform: template
+    name: "Display Text"
+    id: display_text
+    update_interval: never
+  - platform: template
+    name: "LED Farbe"
+    id: led_color_text
+    update_interval: never
+
+# ---------- LED mit PWM ----------
+output:
+  - platform: ledc
+    pin: GPIO23
+    id: green_led_pwm
+    frequency: 1220Hz
+  - platform: ledc
+    pin: GPIO04
+    id: red_led_pwm
+    frequency: 1220Hz
+
+light:
+  - platform: monochromatic
+    name: "LED Grün"
+    id: green_led_light
+    output: green_led_pwm
+    default_transition_length: 80ms
+    gamma_correct: 1.0
+    restore_mode: ALWAYS_OFF
+  - platform: monochromatic
+    name: "LED Rot"
+    id: red_led_light
+    output: red_led_pwm
+    default_transition_length: 80ms
+    gamma_correct: 1.0
+    restore_mode: ALWAYS_OFF
+
+sensor:
+  - platform: adc
+    pin: GPIO35
+    id: battery_voltage_raw
+    name: "Battery Voltage Raw"
+    update_interval: never
+    attenuation: 12db
+    filters:
+      - multiply: 2.0
+
+  - platform: template
+    name: "Battery Level"
+    id: battery_level
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: never
+    lambda: |-
+      float v = id(battery_voltage_raw).state;
+      const float V_MIN = 3.3;
+      const float V_MAX = 4.2;
+      float pct = (v - V_MIN) / (V_MAX - V_MIN) * 100.0;
+      if (pct < 0) pct = 0;
+      if (pct > 100) pct = 100;
+
+      if (pct < 10) {
+        id(led_color_mode) = 2;
+        id(led_color_text).publish_state("🔴");
+      } else if (pct < 20) {
+        id(led_color_mode) = 1;
+        id(led_color_text).publish_state("🟠");
+      } else {
+        id(led_color_mode) = 0;
+        id(led_color_text).publish_state("🟢");
+      }
+      return round(pct);
+
+  - platform: rotary_encoder
+    name: "Sonos Lautstaerke"
+    pin_a: GPIO16
+    pin_b: GPIO17
+    id: rotary_vol
+    min_value: 0
+    max_value: 100
+    resolution: 1
+    filters:
+      - debounce: 5ms
+    on_clockwise:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition:
+              lambda: 'return id(gaming_mode);'
+            then:
+              # Drehung startet vom PONG-Screen den Countdown
+              - if:
+                  condition:
+                    lambda: 'return !id(playing) && (id(countdown_until_ms) == 0) && !id(game_over);'
+                  then:
+                    - script.execute: new_game
+                  else:
+                    - lambda: 'id(paddle_x) += id(enc_px_per_step);'
+            else:
+              - script.execute: { id: toast_show, msg: "LAUTER", ms: 900 }
+              - script.execute: { id: vol_enqueue, delta: 1 }
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+    on_anticlockwise:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition:
+              lambda: 'return id(gaming_mode);'
+            then:
+              # Drehung startet vom PONG-Screen den Countdown
+              - if:
+                  condition:
+                    lambda: 'return !id(playing) && (id(countdown_until_ms) == 0) && !id(game_over);'
+                  then:
+                    - script.execute: new_game
+                  else:
+                    - lambda: 'id(paddle_x) -= id(enc_px_per_step);'
+            else:
+              - script.execute: { id: toast_show, msg: "LEISER", ms: 900 }
+              - script.execute: { id: vol_enqueue, delta: -1 }
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+
+# ---------- Scripts ----------
+script:
+  - id: poke_activity
+    mode: restart
+    then:
+      - lambda: |-
+          id(last_input_ms) = millis();
+          if (!id(display_is_on)) {
+            id(display_is_on) = true;
+            id(oled_display).turn_on();
+          }
+
+  - id: set_display_text
+    parameters:
+      msg: string
+    then:
+      - script.execute: poke_activity
+      - lambda: |-
+          std::string m = msg;
+          if (id(last_display_text) != m) {
+            id(last_display_text) = m;
+            id(display_text).publish_state(m.c_str());
+          }
+      - component.update: oled_display
+
+  - id: toast_show
+    parameters:
+      msg: string
+      ms: int
+    then:
+      - script.execute: { id: set_display_text, msg: !lambda 'return msg;' }
+      - lambda: |-
+          id(toast_active) = true;
+          id(toast_reset_due_ms) = millis() + (uint32_t) ms;
+
+  - id: refresh_battery_and_led
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          if (now >= id(battery_next_update_ms)) {
+            id(battery_next_update_ms) = now + 10000UL;
+            id(battery_voltage_raw).update();
+            id(battery_level).update();
+          }
+      - script.execute: led_feedback
+
+  - id: show_sonos_text
+    mode: restart
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: sonos_switch
+          then:
+            - script.execute: { id: set_display_text, msg: " SONOS 1" }
+          else:
+            - script.execute: { id: set_display_text, msg: " SONOS 2" }
+
+  - id: show_battery_level
+    mode: restart
+    then:
+      - lambda: |-
+          id(battery_voltage_raw).update();
+          id(battery_level).update();
+      - script.execute:
+          id: set_display_text
+          msg: !lambda |-
+            char buf[16];
+            sprintf(buf, "%d%%", (int)id(battery_level).state);
+            return std::string(buf);
+      - script.execute: { id: toast_hold_current, ms: 2000 }
+
+  - id: toast_hold_current
+    parameters:
+      ms: int
+    then:
+      - lambda: |-
+          id(toast_active) = true;
+          id(toast_reset_due_ms) = millis() + (uint32_t) ms;
+
+  - id: rotary_led_off
+    mode: restart
+    then:
+      - delay: 500ms
+      - light.turn_off: green_led_light
+      - light.turn_off: red_led_light
+
+  - id: led_feedback
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(gaming_mode);'
+          then:
+            - light.turn_off: green_led_light
+            - light.turn_off: red_led_light
+            - if:
+                condition:
+                  lambda: 'return id(led_color_mode) == 2;'
+                then:
+                  - light.turn_on: { id: red_led_light, brightness: 30% }
+                else:
+                  - if:
+                      condition:
+                        lambda: 'return id(led_color_mode) == 1;'
+                      then:
+                        - light.turn_on: { id: red_led_light, brightness: 30% }
+                        - light.turn_on: { id: green_led_light, brightness: 30% }
+                      else:
+                        - light.turn_on: { id: green_led_light, brightness: 30% }
+            - script.execute: rotary_led_off
+
+  - id: led_feedback_hold
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(gaming_mode);'
+          then:
+            - light.turn_off: green_led_light
+            - light.turn_off: red_led_light
+            - if:
+                condition:
+                  lambda: 'return id(led_color_mode) == 2;'
+                then:
+                  - light.turn_on: { id: red_led_light, brightness: 30% }
+                else:
+                  - if:
+                      condition:
+                        lambda: 'return id(led_color_mode) == 1;'
+                      then:
+                        - light.turn_on: { id: red_led_light, brightness: 30% }
+                        - light.turn_on: { id: green_led_light, brightness: 30% }
+                      else:
+                        - light.turn_on: { id: green_led_light, brightness: 30% }
+
+  - id: led_off_immediate
+    then:
+      - light.turn_off: green_led_light
+      - light.turn_off: red_led_light
+
+  - id: new_game
+    mode: restart
+    then:
+      - script.execute: poke_activity
+      - lambda: |-
+          id(score) = 0;
+          id(game_over) = false;
+          id(playing) = false;
+          id(paused) = false;
+          id(game_over_blinked) = false;
+          id(paddle_x) = 64.0f;
+          id(ball_x)   = 64.0f;
+          id(ball_y)   = 20.0f;
+          float ang = (random(30, 150) * 3.1415926f) / 180.0f;
+          float base_speed = 81.0f;
+          id(ball_vx) = cosf(ang) * base_speed;
+          id(ball_vy) = fabsf(sinf(ang)) * base_speed;
+          id(countdown_until_ms) = millis() + 3000;
+
+  - id: blink_red_double
+    then:
+      - light.turn_off: green_led_light
+      - repeat:
+          count: 2
+          then:
+            - light.turn_on: { id: red_led_light, brightness: 30% }
+            - delay: 200ms
+            - light.turn_off: red_led_light
+            - delay: 200ms
+
+  - id: enter_gaming_mode
+    then:
+      - script.execute: poke_activity
+      - lambda: |-
+          id(gaming_mode) = true;
+          id(playing) = false;
+          id(paused) = false;
+          id(countdown_until_ms) = 0;
+          id(toast_active) = false;
+      - script.execute: { id: set_display_text, msg: "" }
+
+  - id: exit_gaming_mode
+    then:
+      - lambda: |-
+          id(gaming_mode) = false;
+          id(playing) = false;
+          id(paused) = false;
+          id(game_over) = false;
+          id(countdown_until_ms) = 0;
+          id(game_over_blinked) = false;
+          id(toast_active) = false;
+      - light.turn_off: red_led_light
+      - light.turn_off: green_led_light
+      - script.execute: show_sonos_text
+
+  - id: ha_evt
+    parameters:
+      act: string
+      preset: int
+      delta: int
+    then:
+      - homeassistant.event:
+          event: esphome.sonos_remote
+          data:
+            source: "sonos-remote-d32-flat"
+            action: !lambda 'return act;'
+            target: !lambda 'return id(sonos_switch).state ? 1 : 2;'
+            preset: !lambda 'return preset;'
+            delta: !lambda 'return delta;'
+
+  - id: vol_enqueue
+    parameters:
+      delta: int
+    then:
+      - lambda: |-
+          id(pending_vol_delta) += delta;
+          id(vol_flush_due_ms) = millis() + 120;
+
+  - id: enter_deep_sleep
+    then:
+      # Display leeren
+      - lambda: |-
+          id(display_text).publish_state("");
+          id(oled_display).update();
+          id(oled_display).turn_off();
+
+      - delay: 50ms
+
+      # LEDs aus
+      - light.turn_off: green_led_light
+      - light.turn_off: red_led_light
+
+      # Deep-Sleep-Indikator: jetzt einschlafen -> ON
+      - binary_sensor.template.publish:
+          id: deep_sleep_active
+          state: ON
+
+      # Deep Sleep als Aktion an HA melden (über ha_evt)
+      - script.execute:
+          id: ha_evt
+          act: "deep_sleep"
+          preset: 0
+          delta: 0
+
+      - delay: 1s   # Zeit geben, damit das ON sicher ankommt
+
+      # Ab in den Tiefschlaf
+      - deep_sleep.enter: deep_sleep_control
+
+
+
+
+# --- Intervals ---
+interval:
+  - interval: 33ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(gaming_mode);'
+          then:
+            - lambda: |-
+                static uint32_t last_ms = 0;
+                uint32_t now = millis();
+
+                if (id(countdown_until_ms) != 0
+                    && now >= id(countdown_until_ms)
+                    && !id(playing) && !id(game_over)) {
+                  id(countdown_until_ms) = 0;
+                  id(playing) = true;
+                  last_ms = now;
+                }
+
+                const float Wv = float((int(128) - id(vis_right)) - id(vis_left));
+                const float Hv = float((int( 64) - id(vis_bottom)) - id(vis_top));
+                const float PADDLE_W = 24.0f;
+                const float PADDLE_H = 4.0f;
+                const float PADDLE_Y = Hv - 6.0f;
+                const float R        = 2.0f;
+                float half = PADDLE_W * 0.5f;
+
+                if (Wv > 0.0f) {
+                  if (id(paddle_x) < half) id(paddle_x) = half;
+                  if (id(paddle_x) > (Wv - half)) id(paddle_x) = Wv - half;
+                }
+
+                if (id(countdown_until_ms) > now) { last_ms = now; return; }
+                if (!id(playing) || id(paused) || id(game_over)) { last_ms = now; return; }
+                if (last_ms == 0) { last_ms = now; return; }
+
+                float dt = (now - last_ms) / 1000.0f;
+                last_ms = now;
+                if (dt > 0.1f) dt = 0.1f;
+
+                id(ball_x) += id(ball_vx) * dt;
+                id(ball_y) += id(ball_vy) * dt;
+
+                if (id(ball_x) < R)        { id(ball_x) = R;       id(ball_vx) = -id(ball_vx); }
+                if (id(ball_x) > (Wv - R)) { id(ball_x) = Wv - R;  id(ball_vx) = -id(ball_vx); }
+                if (id(ball_y) < R)        { id(ball_y) = R;       id(ball_vy) = -id(ball_vy); }
+
+                const float half2 = PADDLE_W * 0.5f;
+                const float px0 = id(paddle_x) - half2;
+                const float px1 = id(paddle_x) + half2;
+                if (id(ball_vy) > 0.0f && id(ball_y) >= (PADDLE_Y - R) && id(ball_y) <= (PADDLE_Y + PADDLE_H + R)) {
+                  if (id(ball_x) >= px0 - R && id(ball_x) <= px1 + R) {
+                    id(ball_y) = PADDLE_Y - R;
+                    float hitnorm = (id(ball_x) - id(paddle_x)) / half2;
+                    id(ball_vx) = hitnorm * 80.0f;
+                    id(ball_vy) = -fabsf(id(ball_vy));
+                    id(ball_vx) *= 1.03f;
+                    id(ball_vy) *= 1.03f;
+                    id(score) += 1;
+                  }
+                }
+
+                if (id(ball_y) > (Hv + 6.0f)) {
+                  id(playing) = false;
+                  id(game_over) = true;
+                  id(paused) = false;
+                  id(game_over_ms) = now;
+                  id(game_over_blinked) = false;
+                }
+
+  - interval: 66ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(gaming_mode);'
+          then:
+            - component.update: oled_display
+
+  - interval: 100ms
+    then:
+      - lambda: |-
+          if (id(toast_active) && millis() >= id(toast_reset_due_ms)) {
+            id(toast_active) = false;
+            id(show_sonos_text).execute();
+          }
+
+  - interval: 50ms
+    then:
+      - lambda: |-
+          if (id(pending_vol_delta) != 0 && millis() >= id(vol_flush_due_ms)) {
+            int d = id(pending_vol_delta);
+            id(pending_vol_delta) = 0;
+            id(ha_evt).execute("vol_delta", 0, d);
+          }
+
+
+
+  - interval: 10s
+    then:
+      - lambda: |-
+          if (id(gaming_mode)) {
+            uint32_t now = millis();
+            if (id(game_over)) {
+              if ((now - (uint32_t)id(game_over_ms)) > 20000UL) {
+                id(exit_gaming_mode).execute();
+              }
+            } else {
+              if ((now - id(last_input_ms)) > 180000UL) {
+                id(exit_gaming_mode).execute();
+              }
+            }
+          } else {
+            // Deep Sleep Check (nur im normalen Modus)
+            uint32_t now = millis();
+            if ((now - id(last_input_ms)) > id(deep_sleep_timeout_ms)) {
+              id(enter_deep_sleep).execute();
+            }
+          }
+
+
+  - interval: 2s
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          if (!id(gaming_mode) && id(display_is_on) && (now - id(last_input_ms) > id(display_sleep_ms))) {
+            id(display_is_on) = false;
+            id(oled_display).turn_off();
+            id(display_text).publish_state("");   // <- Textsensor leeren
+          }
+
+  - interval: 250ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(gaming_mode) && id(game_over) && !id(game_over_blinked);'
+          then:
+            - script.execute: blink_red_double
+            - lambda: 'id(game_over_blinked) = true;'
+
+# ---------- Inputs ----------
+binary_sensor:
+  - platform: template
+    name: "Deep Sleep"
+    id: deep_sleep_active
+    device_class: power
+
+
+  - platform: gpio
+    pin:
+      number: GPIO36
+      mode: INPUT
+    id: sonos_switch
+    name: "Sonos Auswahl"
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition: { lambda: 'return id(gaming_mode);' }
+            then:
+              - lambda: '/* nur Aktivität im Gaming-Mode */'
+            else:
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+              - script.execute: show_sonos_text
+    on_release:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition: { lambda: 'return id(gaming_mode);' }
+            then:
+              - lambda: '/* nur Aktivität im Gaming-Mode */'
+            else:
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+              - script.execute: show_sonos_text
+
+  # TASTE 1–6 (doppelte Toast-Dauer)
+  - platform: gpio
+    pin:
+      number: GPIO32
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "TASTE 1"
+    filters: [delayed_on: 10ms, delayed_off: 10ms]
+    on_press:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition: { lambda: 'return !id(gaming_mode);' }
+            then:
+              - script.execute: { id: toast_show, msg: "RADIO 1", ms: 1800 }
+              - script.execute: { id: ha_evt, act: "preset", preset: 1, delta: 0 }
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+
+  - platform: gpio
+    pin:
+      number: GPIO33
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "TASTE 2"
+    filters: [delayed_on: 10ms, delayed_off: 10ms]
+    on_press:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition: { lambda: 'return !id(gaming_mode);' }
+            then:
+              - script.execute: { id: toast_show, msg: "RADIO 2", ms: 1800 }
+              - script.execute: { id: ha_evt, act: "preset", preset: 2, delta: 0 }
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+
+  - platform: gpio
+    pin:
+      number: GPIO25
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "TASTE 3"
+    filters: [delayed_on: 10ms, delayed_off: 10ms]
+    on_press:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition: { lambda: 'return !id(gaming_mode);' }
+            then:
+              - script.execute: { id: toast_show, msg: "RADIO 3", ms: 1800 }
+              - script.execute: { id: ha_evt, act: "preset", preset: 3, delta: 0 }
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+
+  - platform: gpio
+    pin:
+      number: GPIO26
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "TASTE 4"
+    filters: [delayed_on: 10ms, delayed_off: 10ms]
+    on_press:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition: { lambda: 'return !id(gaming_mode);' }
+            then:
+              - script.execute: { id: toast_show, msg: "RADIO 4", ms: 1800 }
+              - script.execute: { id: ha_evt, act: "preset", preset: 4, delta: 0 }
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+
+  - platform: gpio
+    pin:
+      number: GPIO27
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "TASTE 5"
+    filters: [delayed_on: 10ms, delayed_off: 10ms]
+    on_press:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition: { lambda: 'return !id(gaming_mode);' }
+            then:
+              - script.execute: { id: toast_show, msg: "NEXT", ms: 1800 }
+              - script.execute: { id: ha_evt, act: "preset", preset: 5, delta: 0 }
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+
+  - platform: gpio
+    pin:
+      number: GPIO13
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "TASTE 6"
+    filters: [delayed_on: 10ms, delayed_off: 10ms]
+    on_press:
+      then:
+        - script.execute: poke_activity
+        - if:
+            condition: { lambda: 'return !id(gaming_mode);' }
+            then:
+              - script.execute: { id: toast_show, msg: "SPOTIFY", ms: 1800 }
+              - script.execute: { id: ha_evt, act: "preset", preset: 6, delta: 0 }
+              - script.execute: refresh_battery_and_led
+              - script.execute: rotary_led_off
+
+  # ENCODER KLICK — Longpress 2 s; Short-Press: (Game Start/Pause) + IMMER Sonos stoppen
+  - platform: gpio
+    pin:
+      number: GPIO14
+      mode: INPUT_PULLUP
+      inverted: true
+      allow_other_uses: true
+    name: "ENCODER KLICK"
+    id: encoder_klick
+    on_press:
+      then:
+        - script.execute: poke_activity
+        - lambda: |-
+            id(press_start_ms) = millis();
+            id(longpress_triggered) = false;
+        - script.execute: led_feedback_hold
+        - wait_until:
+            condition:
+              lambda: |-
+                return (millis() - id(press_start_ms) >= 2000)
+                       && id(encoder_klick).state
+                       && !id(longpress_triggered);
+            timeout: 2100ms
+        - if:
+            condition:
+              lambda: |-
+                return (millis() - id(press_start_ms) >= 2000)
+                       && id(encoder_klick).state
+                       && !id(longpress_triggered);
+            then:
+              - lambda: 'id(longpress_triggered) = true;'
+              - script.execute: led_off_immediate
+              - if:
+                  condition:
+                    lambda: 'return !id(gaming_mode);'
+                  then:
+                    - script.execute: enter_gaming_mode
+                  else:
+                    - script.execute: exit_gaming_mode
+            else:
+              - script.execute: rotary_led_off
+    on_release:
+      then:
+        - if:
+            condition:
+              lambda: 'return !id(longpress_triggered);'
+            then:
+              - script.execute: poke_activity
+              - if:
+                  condition:
+                    lambda: 'return id(gaming_mode);'
+                  then:
+                    # Gaming-Mode: Game-Logik (Start/Restart/Pause) ...
+                    - if:
+                        condition:
+                          lambda: 'return id(countdown_until_ms) > millis();'
+                        then:
+                          - lambda: '/* ignore during countdown */'
+                        else:
+                          - if:
+                              condition:
+                                lambda: 'return id(game_over);'
+                              then:
+                                - script.execute: new_game
+                              else:
+                                - lambda: |-
+                                    if (id(playing)) {
+                                      id(paused) = !id(paused);
+                                    }
+                    # KEIN toggle_playback mehr im Gaming-Mode!
+                  else:
+                    # Normalmodus: Batteriestand als kurzer Toast ...
+                    - script.execute: show_battery_level
+                    # ... UND NUR HIER: ausgewählte Sonos stoppen
+                    - script.execute: { id: ha_evt, act: "toggle_playback", preset: 0, delta: 0 }
+              - script.execute: rotary_led_off
