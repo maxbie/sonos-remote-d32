@@ -7,14 +7,6 @@ Includes OLED display, rotary encoder, LED feedback, deep sleep mode – and eve
   <img src="https://github.com/user-attachments/assets/50707a96-a341-434d-86a5-f0f2064b682a" alt="Sonos Remote D32" width="480">
 </p>
 
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/50707a96-a341-434d-86a5-f0f2064b682a">
-    <img src="https://github.com/user-attachments/assets/50707a96-a341-434d-86a5-f0f2064b682a" alt="Sonos Remote D32" width="480">
-  </a>
-</p>
-
-
 ## Features
 - Control two Sonos zones
 - 6 preset buttons for radio/playlists
