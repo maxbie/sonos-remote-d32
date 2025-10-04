@@ -39,6 +39,12 @@ wifi:
   power_save_mode: HIGH
   output_power: 10dB
   reboot_timeout: 0s
+  on_connect:
+    - if:
+        condition:
+          lambda: 'return !id(startup_blink_done);'
+        then:
+          - script.execute: led_startup_blink
 
 api:
   encryption:
@@ -216,6 +222,12 @@ globals:
     type: uint32_t
     restore_value: no
     initial_value: '0'
+
+  # Startup LED feedback
+  - id: startup_blink_done
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
 i2c:
   sda: 21
@@ -443,7 +455,7 @@ sensor:
     id: rotary_vol
     min_value: 0
     max_value: 100
-    resolution: 1
+    resolution: 2
     filters:
       - debounce: 5ms
     on_clockwise:
@@ -586,16 +598,16 @@ script:
                 condition:
                   lambda: 'return id(led_color_mode) == 2;'
                 then:
-                  - light.turn_on: { id: red_led_light, brightness: 30% }
+                  - light.turn_on: { id: red_led_light, brightness: 20% }
                 else:
                   - if:
                       condition:
                         lambda: 'return id(led_color_mode) == 1;'
                       then:
-                        - light.turn_on: { id: red_led_light, brightness: 30% }
-                        - light.turn_on: { id: green_led_light, brightness: 30% }
+                        - light.turn_on: { id: red_led_light, brightness: 20% }
+                        - light.turn_on: { id: green_led_light, brightness: 20% }
                       else:
-                        - light.turn_on: { id: green_led_light, brightness: 30% }
+                        - light.turn_on: { id: green_led_light, brightness: 20% }
             - script.execute: rotary_led_off
 
   - id: led_feedback_hold
@@ -610,16 +622,37 @@ script:
                 condition:
                   lambda: 'return id(led_color_mode) == 2;'
                 then:
-                  - light.turn_on: { id: red_led_light, brightness: 30% }
+                  - light.turn_on: { id: red_led_light, brightness: 20% }
                 else:
                   - if:
                       condition:
                         lambda: 'return id(led_color_mode) == 1;'
                       then:
-                        - light.turn_on: { id: red_led_light, brightness: 30% }
-                        - light.turn_on: { id: green_led_light, brightness: 30% }
+                        - light.turn_on: { id: red_led_light, brightness: 20% }
+                        - light.turn_on: { id: green_led_light, brightness: 20% }
                       else:
-                        - light.turn_on: { id: green_led_light, brightness: 30% }
+                        - light.turn_on: { id: green_led_light, brightness: 20% }
+
+  - id: led_startup_blink
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(gaming_mode);'
+          then:
+            - lambda: |-
+                id(battery_voltage_raw).update();
+                id(battery_level).update();
+            - delay: 20ms
+            - repeat:
+                count: 3
+                then:
+                  - script.execute: led_feedback_hold
+                  - delay: 200ms
+                  - light.turn_off: green_led_light
+                  - light.turn_off: red_led_light
+                  - delay: 200ms
+      - lambda: 'id(startup_blink_done) = true;'
 
   - id: led_off_immediate
     then:
@@ -651,7 +684,7 @@ script:
       - repeat:
           count: 2
           then:
-            - light.turn_on: { id: red_led_light, brightness: 30% }
+            - light.turn_on: { id: red_led_light, brightness: 20% }
             - delay: 200ms
             - light.turn_off: red_led_light
             - delay: 200ms
