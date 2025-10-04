@@ -4,7 +4,7 @@ DIY ESP32 remote for Sonos, built with [ESPHome](https://esphome.io/) and [Home 
 Includes OLED display, rotary encoder, LED feedback, deep sleep mode – and even a Pong mini-game 🎮.
 
 <p align="left">
-  <img src="https://github.com/user-attachments/assets/50707a96-a341-434d-86a5-f0f2064b682a" alt="Sonos Remote D32" width="480">
+  <img src="https://github.com/user-attachments/assets/50707a96-a341-434d-86a5-f0f2064b682a" alt="Sonos Remote D32" width="720">
 </p>
 
 ## Features
